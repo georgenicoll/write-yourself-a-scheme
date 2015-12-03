@@ -30,40 +30,37 @@ escapeCodes = oneOf "nrt\\"
 
 escapedChar :: Parser Char
 escapedChar = do
-                char '\\'
-                escaped <- escapeCodes
-                return $ case escaped of
-                            'n'  -> '\n'
-                            'r'  -> '\r'
-                            't'  -> '\t'
-                            '\\' -> '\\'
+    escaped <- char '\\' >> escapeCodes
+    return $ case escaped of
+            'n'  -> '\n'
+            'r'  -> '\r'
+            't'  -> '\t'
+            '\\' -> '\\'
 
 parseString :: Parser LispVal
 parseString = do
-                char '"'
-                x <- many (nonQuote <|> escapedChar)
-                char '"'
-                return $ String x
+    char '"'
+    x <- many (nonQuote <|> escapedChar)
+    char '"'
+    return $ String x
 
 parseAtom :: Parser LispVal
 parseAtom = do
-              first <- letter <|> symbol
-              rest <- many(letter <|> digit <|> symbol)
-              let atom = first:rest
-              return $ case atom of
-                        "#t" -> Bool True
-                        "#f" -> Bool False
-                        _    -> Atom atom
+    first <- letter <|> symbol
+    rest <- many(letter <|> digit <|> symbol)
+    let atom = first:rest
+    return $ case atom of
+            "#t" -> Bool True
+            "#f" -> Bool False
+            _    -> Atom atom
 
 parseNum :: Parser String
 parseNum = liftM read $ many1 digit
 
 parseNumFromBase :: String -> (String -> Integer) -> Parser LispVal
 parseNumFromBase chars f = do
-                           char '#'
-                           oneOf chars
-                           n <- parseNum
-                           return $ Number $ f n
+    n <- char '#' >> oneOf chars >> parseNum
+    return $ Number $ f n
 
 parseBin :: Parser LispVal
 parseBin = parseNumFromBase "bB" (fst . head . readInt 2 (`elem` "01") digitToInt)
@@ -81,13 +78,16 @@ parseInt :: Parser LispVal
 parseInt = parseNum >>= \n -> return $ Number (read n)
 
 parseNumber :: Parser LispVal
-parseNumber = parseBin <|> parseInt
+parseNumber = try parseDecimal
+                <|> parseBin
+                <|> parseOct
+                <|> parseHex
+                <|> parseDec
+                <|> parseInt
 
 parseCharacter :: Parser LispVal
 parseCharacter = do
-    char '#'
-    char '\\'
-    ident <- many(letter)
+    ident <- char '#' >> char '\\' >> many(letter)
     let upperIdent = map toUpper ident
     return $ Character $ case (upperIdent, ident) of
                             ("NEWLINE", _)        -> '\n'
@@ -98,21 +98,39 @@ parseCharacter = do
 parseDecimal :: Parser LispVal
 parseDecimal = do
     intpart <- many(digit)
-    char '.'
-    fracPart <- many(digit <|> letter)
+    fracPart <- char '.' >> many(digit <|> letter)
     return $ Decimal $ (fst . head . readFloat) (intpart ++ ['.'] ++ fracPart)
 
-parseExpr :: Parser LispVal
-parseExpr = parseAtom
-         <|> parseString
-         <|> parseDecimal
-         <|> parseNumber
-         <|> parseCharacter
+parseList :: Parser LispVal
+parseList = liftM List $ sepBy parseExpr spaces
+
+parseDottedList :: Parser LispVal
+parseDottedList = do
+    head <- endBy parseExpr spaces
+    tail <- char '.' >> spaces >> parseExpr
+    return $ DottedList head tail
+
+parseQuoted :: Parser LispVal
+parseQuoted = do
+    char '\''
+    x <- parseExpr
+    return $ List [Atom "quote", x]
 
 readExpr :: String -> String
 readExpr input = case parse parseExpr "lisp" input of
     Left err -> "No Match: " ++ show err
     Right val -> "Found Value"
+
+parseExpr :: Parser LispVal
+parseExpr = parseAtom
+        <|> parseString
+        <|> parseNumber
+        <|> parseCharacter
+        <|> parseQuoted
+        <|> do char '('
+               x <- try parseList <|> parseDottedList
+               char ')'
+               return x
 
 main :: IO ()
 main = do
